@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Vocabulary, TabType } from './types';
-import { INITIAL_VOCAB } from './constants';
+import { INITIAL_VOCAB, LESSON_TITLES } from './constants';
 import { Button } from './components/Button';
 import { Flashcard } from './components/Flashcard';
 import { explainWord, suggestVocabDetails, generateVocabImage } from './services/geminiService';
@@ -12,14 +12,14 @@ type ScopeMode = 'single' | 'all';
 const App: React.FC = () => {
   const [vocabData, setVocabData] = useState<Vocabulary[]>(() => {
     const saved = localStorage.getItem('n5_vocab_data');
-    return saved ? JSON.parse(saved) : INITIAL_VOCAB;
+    const parsedSaved = saved ? JSON.parse(saved) : [];
+    return (parsedSaved.length === 0 && INITIAL_VOCAB.length > 0) ? INITIAL_VOCAB : parsedSaved;
   });
 
   const [activeTab, setActiveTab] = useState<TabType>('flashcard');
   const [listSubTab, setListSubTab] = useState<SubTabType>('all');
-  const [selectedLesson, setSelectedLesson] = useState<number>(5); // Mặc định bài 5 (động từ)
+  const [selectedLesson, setSelectedLesson] = useState<number | null>(null);
   const [studyScope, setStudyScope] = useState<ScopeMode>('single');
-  const [onlyVerbs, setOnlyVerbs] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [score, setScore] = useState(0);
   const [quizWord, setQuizWord] = useState<Vocabulary | null>(null);
@@ -45,32 +45,32 @@ const App: React.FC = () => {
     localStorage.setItem('n5_vocab_data', JSON.stringify(vocabData));
   }, [vocabData]);
 
-  // Lấy danh sách các bài có dữ liệu
   const availableLessons = useMemo(() => {
-    const lessons = Array.from(new Set(vocabData.map(v => v.lesson))).sort((a, b) => a - b);
-    return lessons;
+    const lessons = Array.from(new Set(vocabData.map(v => v.lesson))).sort((a: number, b: number) => a - b);
+    return lessons.length > 0 ? lessons : Array.from({length: 25}, (_, i) => i + 1);
   }, [vocabData]);
 
-  // Lọc từ vựng cho Flashcard và Quiz dựa trên Scope
   const filteredFlashcards = useMemo(() => {
+    if (selectedLesson === null && studyScope === 'single') return [];
     return vocabData.filter(v => {
       const matchesLesson = studyScope === 'all' || v.lesson === selectedLesson;
-      const matchesOnlyVerbs = !onlyVerbs || v.category === 'verb';
-      return matchesLesson && matchesOnlyVerbs;
+      return matchesLesson;
     });
-  }, [vocabData, selectedLesson, studyScope, onlyVerbs]);
+  }, [vocabData, selectedLesson, studyScope]);
 
-  // Reset index khi đổi bộ lọc
   useEffect(() => {
     setCurrentIndex(0);
     if (activeTab === 'quiz') generateQuiz();
-  }, [selectedLesson, studyScope, onlyVerbs, activeTab]);
+  }, [selectedLesson, studyScope, activeTab]);
 
   const generateQuiz = useCallback(() => {
     setQuizAnswered(false);
     setQuizFeedback(null);
     
-    if (filteredFlashcards.length === 0) return;
+    if (filteredFlashcards.length === 0) {
+      setQuizWord(null);
+      return;
+    }
     
     const randomIndex = Math.floor(Math.random() * filteredFlashcards.length);
     const correct = filteredFlashcards[randomIndex];
@@ -135,9 +135,17 @@ const App: React.FC = () => {
     setNewKanji('');
     setNewReading('');
     setNewMeaning('');
-    setNewCategory('general');
     setFormFeedback('Đã thêm từ mới thành công! ✨');
     setTimeout(() => setFormFeedback(''), 3000);
+  };
+
+  const handleClearAll = () => {
+    if (window.confirm("Bạn có chắc chắn muốn XÓA TOÀN BỘ dữ liệu và KHÔI PHỤC về dữ liệu gốc từ sách không?")) {
+      setVocabData(INITIAL_VOCAB);
+      localStorage.setItem('n5_vocab_data', JSON.stringify(INITIAL_VOCAB));
+      setFormFeedback('Đã khôi phục dữ liệu gốc! 📚');
+      setSelectedLesson(null);
+    }
   };
 
   const handleExplain = async (vocab: Vocabulary) => {
@@ -151,9 +159,8 @@ const App: React.FC = () => {
         explainWord(vocab.kanji, vocab.reading, vocab.meaning),
         generateVocabImage(vocab.kanji, vocab.meaning)
       ]);
-      
       setAiExplanation(textResult || "Không thể lấy lời giải thích lúc này.");
-      setAiImage(imageResult);
+      setAiImage(imageResult || null);
     } catch (e) {
       setAiExplanation("Lỗi khi kết nối với AI.");
     } finally {
@@ -167,6 +174,17 @@ const App: React.FC = () => {
     setExplainingVocab(null);
   };
 
+  const selectLesson = (lesson: number | 'all') => {
+    if (lesson === 'all') {
+      setStudyScope('all');
+      setSelectedLesson(null);
+    } else {
+      setStudyScope('single');
+      setSelectedLesson(lesson);
+    }
+    setActiveTab('flashcard');
+  };
+
   const filteredList = vocabData.filter(v => {
     const matchesSearch = v.kanji.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           v.meaning.toLowerCase().includes(searchQuery.toLowerCase());
@@ -175,47 +193,100 @@ const App: React.FC = () => {
     return matchesSearch && matchesCategory && matchesLesson;
   });
 
-  // UI Component cho bộ chọn Phạm vi
-  const ScopeSelector = () => (
-    <div className="flex p-1 bg-slate-100 rounded-xl w-fit mx-auto shadow-inner">
-      <button 
-        onClick={() => setStudyScope('single')}
-        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${studyScope === 'single' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-      >
-        Bài {selectedLesson}
-      </button>
-      <button 
-        onClick={() => setStudyScope('all')}
-        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${studyScope === 'all' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-      >
-        Tất cả (104 từ)
-      </button>
-    </div>
-  );
+  const currentLessonTitle = useMemo(() => {
+    if (studyScope === 'all') return "Tất cả bài học";
+    if (selectedLesson === null) return "Minna Master";
+    return LESSON_TITLES[selectedLesson] || `Bài học ${selectedLesson}`;
+  }, [selectedLesson, studyScope]);
+
+  // Màn hình chọn bài
+  if (selectedLesson === null && studyScope === 'single') {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4 md:p-10 flex flex-col items-center animate-in fade-in duration-500 overflow-y-auto">
+        <div className="max-w-4xl w-full space-y-8 py-10">
+          <div className="text-center space-y-4">
+            <div className="w-20 h-20 bg-red-600 rounded-3xl mx-auto flex items-center justify-center shadow-2xl shadow-red-200">
+               <span className="text-white font-bold text-3xl">N5</span>
+            </div>
+            <h1 className="text-4xl font-extrabold text-slate-800 tracking-tight">Lộ trình Minna Master</h1>
+            <p className="text-slate-500 text-lg">Hôm nay bạn muốn chinh phục bài học nào?</p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {availableLessons.map(l => (
+              <button 
+                key={l} 
+                onClick={() => selectLesson(l)}
+                className="bg-white border-2 border-slate-100 p-6 rounded-3xl flex flex-col items-center justify-center hover:border-red-500 hover:shadow-xl hover:shadow-red-50 transition-all group relative overflow-hidden text-center h-40"
+              >
+                <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition-opacity">
+                   <span className="text-6xl font-black">{l}</span>
+                </div>
+                <span className="text-red-500 text-xs font-black uppercase tracking-widest mb-1">Bài</span>
+                <span className="text-3xl font-black text-slate-800 mb-2">{l}</span>
+                <span className="text-slate-500 text-[11px] font-bold leading-tight line-clamp-2 px-2">
+                  {LESSON_TITLES[l] || "Chủ đề bài học"}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="pt-6">
+            <button 
+              onClick={() => selectLesson('all')}
+              className="w-full py-6 bg-slate-800 text-white rounded-3xl font-bold text-xl shadow-xl hover:bg-slate-900 transition-all flex items-center justify-center gap-4 group"
+            >
+              <span className="text-2xl group-hover:scale-125 transition-transform">🔥</span>
+              <span>Học tất cả {vocabData.length} từ vựng N5</span>
+            </button>
+          </div>
+
+          <div className="text-center pt-4">
+            <button 
+              onClick={() => setActiveTab('add')}
+              className="text-slate-400 hover:text-red-600 font-bold flex items-center justify-center gap-2 mx-auto transition-colors"
+            >
+              <span>Bạn muốn tự soạn bài riêng? Thêm từ mới ngay</span>
+              <span className="bg-slate-100 px-3 py-1 rounded-xl text-xs">➔</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pb-24">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40 px-4 py-3 shadow-sm">
+      <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40 px-4 py-3 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center shadow-lg shadow-red-200">
+            <button 
+              onClick={() => setSelectedLesson(null)} 
+              className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center shadow-lg shadow-red-200 hover:scale-105 transition-transform"
+            >
               <span className="text-white font-bold text-xl">N5</span>
+            </button>
+            <div className="flex flex-col">
+              <h1 className="text-base font-black text-slate-800 leading-none truncate max-w-[150px] sm:max-w-none">
+                {currentLessonTitle}
+              </h1>
+              <span className="text-[10px] text-slate-400 font-black uppercase tracking-tighter">Minna no Nihongo Course</span>
             </div>
-            <h1 className="text-xl font-bold text-slate-800 hidden sm:block italic tracking-tight">V-Master</h1>
           </div>
+          
           <div className="flex items-center gap-2">
-            <div className="bg-slate-100 px-3 py-1.5 rounded-full flex items-center gap-2">
-               <span className="text-slate-500 text-xs font-bold uppercase">Bài</span>
-               <select 
-                 value={selectedLesson} 
-                 onChange={(e) => setSelectedLesson(parseInt(e.target.value))}
-                 className="bg-transparent font-bold text-red-600 text-sm focus:outline-none cursor-pointer"
-               >
-                 {availableLessons.map(l => <option key={l} value={l}>{l}</option>)}
-               </select>
-            </div>
-            <div className="bg-slate-800 px-3 py-1.5 rounded-full">
-              <span className="text-white font-bold text-sm">{score}</span>
+            <button 
+              onClick={() => setSelectedLesson(null)} 
+              className="hidden sm:flex bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-full items-center gap-2 transition-colors border border-slate-200"
+            >
+               <span className="text-slate-400 text-[10px] font-bold uppercase">Bài:</span>
+               <span className="font-black text-slate-700 text-sm">{studyScope === 'all' ? 'Tất cả' : selectedLesson}</span>
+               <span className="text-slate-300">|</span>
+               <span className="text-red-600 text-xs font-black uppercase">Đổi</span>
+            </button>
+            <div className="bg-slate-800 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+              <span className="text-xs">🏆</span>
+              <span className="text-white font-black text-sm">{score}</span>
             </div>
           </div>
         </div>
@@ -224,18 +295,9 @@ const App: React.FC = () => {
       <main className="max-w-4xl mx-auto p-4 md:p-8">
         {activeTab === 'flashcard' && (
           <div className="space-y-8 animate-in fade-in duration-500">
-            <div className="flex flex-col items-center gap-6">
-              <div className="text-center space-y-2">
-                <h2 className="text-2xl font-bold text-slate-800">Luyện tập Flashcard</h2>
-                <ScopeSelector />
-              </div>
-              
-              <button 
-                onClick={() => setOnlyVerbs(!onlyVerbs)}
-                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${onlyVerbs ? 'bg-red-600 text-white shadow-lg' : 'bg-white border border-slate-200 text-slate-500 hover:border-red-200'}`}
-              >
-                {onlyVerbs ? '✓ Đang xem Động từ' : 'Chỉ xem Động từ?'}
-              </button>
+            <div className="text-center space-y-1">
+                <h2 className="text-2xl font-black text-slate-800">Luyện tập từ vựng</h2>
+                <p className="text-slate-400 text-sm font-bold uppercase tracking-widest italic">{currentLessonTitle}</p>
             </div>
             
             {filteredFlashcards.length > 0 ? (
@@ -244,58 +306,49 @@ const App: React.FC = () => {
                 <div className="flex items-center justify-between max-w-md mx-auto">
                   <Button variant="outline" onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))} disabled={currentIndex === 0}>❮</Button>
                   <div className="flex flex-col items-center">
-                    <div className="text-sm font-bold text-slate-800">{currentIndex + 1} / {filteredFlashcards.length}</div>
-                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Tiến độ</div>
+                    <div className="text-sm font-black text-slate-800">{currentIndex + 1} / {filteredFlashcards.length}</div>
+                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Tiến độ bài</div>
                   </div>
                   <Button variant="outline" onClick={() => setCurrentIndex(prev => Math.min(filteredFlashcards.length - 1, prev + 1))} disabled={currentIndex === filteredFlashcards.length - 1}>❯</Button>
                 </div>
               </>
             ) : (
-              <div className="bg-white p-12 rounded-3xl text-center border-2 border-dashed border-slate-200 text-slate-400">
-                Chưa có dữ liệu cho bộ lọc này. Hãy thử đổi bài hoặc phạm vi!
-              </div>
+              <div className="bg-white p-12 rounded-3xl text-center border-2 border-dashed border-slate-200 text-slate-400">Không có dữ liệu cho Bài này.</div>
             )}
           </div>
         )}
 
         {activeTab === 'quiz' && (
           <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-            <div className="text-center space-y-4">
-              <h2 className="text-2xl font-bold text-slate-800">Kiểm tra kiến thức</h2>
-              <ScopeSelector />
-              <p className="text-slate-500 text-sm">Phạm vi này có {filteredFlashcards.length} câu hỏi tiềm năng</p>
+            <div className="text-center space-y-1">
+              <h2 className="text-2xl font-black text-slate-800">Kiểm tra kiến thức</h2>
+              <p className="text-slate-400 text-sm font-bold uppercase tracking-widest italic">{currentLessonTitle}</p>
             </div>
-            
             {quizWord ? (
               <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 flex flex-col items-center gap-8 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-1 bg-slate-100">
-                  <div className="h-full bg-red-600 transition-all" style={{ width: `${(score % 100)}%` }}></div>
+                  <div className="h-full bg-red-600 transition-all" style={{ width: `${(Number(score) % 100)}%` }}></div>
                 </div>
-                
                 <div className="text-center">
-                   <div className="text-sm text-slate-400 font-bold uppercase mb-2 tracking-widest">Từ vựng</div>
-                   <div className="text-7xl font-bold text-red-600 mb-2 font-['Noto_Sans_JP']">{quizWord?.kanji}</div>
-                   <div className="text-slate-400 font-medium italic h-6">{quizAnswered ? quizWord?.reading : '???'}</div>
+                   <div className="text-sm text-slate-400 font-bold uppercase mb-2 tracking-widest">Hỏi Nghĩa Của Từ</div>
+                   <div className="text-7xl font-black text-red-600 mb-2 font-['Noto_Sans_JP']">{quizWord?.kanji}</div>
+                   <div className="text-slate-400 font-bold italic h-6">{quizAnswered ? quizWord?.reading : '???'}</div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
                   {quizOptions.map((opt) => (
-                    <button key={opt.id} disabled={quizAnswered} onClick={() => handleQuizAnswer(opt)} className={`p-5 rounded-2xl border-2 text-lg font-medium transition-all text-left flex items-center justify-between ${!quizAnswered ? 'border-slate-100 hover:border-red-200 hover:bg-red-50 text-slate-700' : opt.id === quizWord?.id ? 'border-green-500 bg-green-50 text-green-700' : 'border-slate-100 opacity-50 text-slate-400'}`}>
+                    <button key={opt.id} disabled={quizAnswered} onClick={() => handleQuizAnswer(opt)} className={`p-5 rounded-2xl border-2 text-lg font-bold transition-all text-left flex items-center justify-between ${!quizAnswered ? 'border-slate-100 hover:border-red-200 hover:bg-red-50 text-slate-700' : opt.id === quizWord?.id ? 'border-green-500 bg-green-50 text-green-700' : 'border-slate-100 opacity-50 text-slate-400'}`}>
                       <span>{opt.meaning}</span>
                       {quizAnswered && opt.id === quizWord?.id && <span className="text-xl">✓</span>}
                     </button>
                   ))}
                 </div>
-                {quizFeedback && (
-                  <div className={`text-center p-4 rounded-xl w-full font-bold animate-in zoom-in-95 duration-200 ${quizFeedback.correct ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {quizFeedback.message}
-                  </div>
-                )}
-                <Button onClick={generateQuiz} disabled={!quizAnswered} className="w-full py-4 text-lg">Tiếp tục câu tiếp theo ➔</Button>
+                {quizFeedback && <div className={`text-center p-4 rounded-xl w-full font-black ${quizFeedback.correct ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{quizFeedback.message}</div>}
+                <Button onClick={generateQuiz} disabled={!quizAnswered} className="w-full py-4 text-lg">Tiếp tục ➔</Button>
               </div>
             ) : (
               <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200">
-                <p className="text-slate-400 mb-6">Không có từ vựng nào trong phạm vi này.</p>
-                <Button onClick={() => setStudyScope('all')}>Chọn "Tất cả bài"</Button>
+                <p className="text-slate-400 mb-6">Hãy thêm dữ liệu hoặc chọn phạm vi rộng hơn để làm kiểm tra.</p>
+                <Button onClick={() => setSelectedLesson(null)}>Quay lại màn hình chọn bài</Button>
               </div>
             )}
           </div>
@@ -303,55 +356,42 @@ const App: React.FC = () => {
 
         {activeTab === 'list' && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <h2 className="text-2xl font-bold text-slate-800">Sổ tay từ vựng</h2>
-                <input type="text" placeholder="Tìm kiếm nhanh..." className="px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500 w-full md:w-64" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-black text-slate-800">Sổ tay từ vựng</h2>
+                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{currentLessonTitle} ({filteredList.length} từ)</p>
               </div>
-              
-              <div className="flex flex-wrap items-center gap-3">
-                 <ScopeSelector />
-                 <div className="h-8 w-[1px] bg-slate-200 hidden md:block"></div>
-                 <div className="flex p-1 bg-slate-100 rounded-xl gap-1 overflow-x-auto flex-1">
-                  {[{ id: 'all', label: 'Tất cả loại' }, { id: 'verb', label: 'Động từ' }, { id: 'kanji', label: 'Hán tự' }, { id: 'general', label: 'Khác' }].map((sub) => (
-                    <button key={sub.id} onClick={() => setListSubTab(sub.id as SubTabType)} className={`flex-1 py-1.5 px-3 whitespace-nowrap rounded-lg text-xs font-bold transition-all ${listSubTab === sub.id ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{sub.label}</button>
-                  ))}
-                </div>
-              </div>
+              <input type="text" placeholder="Tìm kiếm nhanh..." className="px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none shadow-sm w-full md:w-64" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
             </div>
-
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4 font-bold text-slate-600">Hán tự</th>
-                      <th className="px-6 py-4 font-bold text-slate-600">Cách đọc</th>
-                      <th className="px-6 py-4 font-bold text-slate-600">Ý nghĩa</th>
-                      <th className="px-6 py-4 font-bold text-slate-600 text-center">AI</th>
+            
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-black text-slate-600 text-xs uppercase tracking-widest">Mặt chữ</th>
+                    <th className="px-6 py-4 font-black text-slate-600 text-xs uppercase tracking-widest">Cách đọc</th>
+                    <th className="px-6 py-4 font-black text-slate-600 text-xs uppercase tracking-widest">Nghĩa</th>
+                    <th className="px-6 py-4 font-black text-slate-600 text-xs uppercase tracking-widest text-center">Bài</th>
+                    <th className="px-6 py-4 font-black text-slate-600 text-xs uppercase tracking-widest text-center">AI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredList.map((word) => (
+                    <tr key={word.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-5 font-black text-2xl font-['Noto_Sans_JP'] text-slate-800">{word.kanji}</td>
+                      <td className="px-6 py-5 text-slate-500 font-medium">{word.reading}</td>
+                      <td className="px-6 py-5 text-red-600 font-black">{word.meaning}</td>
+                      <td className="px-6 py-5 text-center font-black text-slate-400">{word.lesson}</td>
+                      <td className="px-6 py-5 text-center">
+                         <button onClick={() => handleExplain(word)} className="text-xl hover:scale-125 transition-transform p-2 bg-slate-50 rounded-xl hover:bg-red-50">✨</button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredList.map((word) => (
-                      <tr key={word.id} className="hover:bg-slate-50 transition-colors group">
-                        <td className="px-6 py-4">
-                          <span className="text-2xl font-bold text-slate-800 font-['Noto_Sans_JP']">{word.kanji}</span>
-                        </td>
-                        <td className="px-6 py-4 text-slate-600 font-medium">
-                          <div className="flex flex-col">
-                            <span>{word.reading}</span>
-                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Bài {word.lesson}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 font-bold text-red-600">{word.meaning}</td>
-                        <td className="px-6 py-4 text-center">
-                           <button className="text-xl hover:scale-125 transition-transform" title="AI Giải thích" onClick={() => handleExplain(word)}>✨</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
+              {filteredList.length === 0 && (
+                <div className="py-20 text-center text-slate-400 font-bold">Không tìm thấy từ nào phù hợp.</div>
+              )}
             </div>
           </div>
         )}
@@ -359,29 +399,29 @@ const App: React.FC = () => {
         {activeTab === 'add' && (
           <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500 max-w-lg mx-auto">
             <div className="text-center space-y-2">
-              <h2 className="text-2xl font-bold text-slate-800">Đóng góp từ mới</h2>
-              <p className="text-slate-500">AI sẽ hỗ trợ bạn điền thông tin tự động</p>
+              <h2 className="text-2xl font-black text-slate-800">Thêm từ vựng mới</h2>
+              <p className="text-slate-500 font-bold">Xây dựng kho từ điển cá nhân của riêng bạn</p>
             </div>
             <form onSubmit={handleAddWord} className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 space-y-6">
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-600 uppercase tracking-wider">Mặt chữ (Kanji)</label>
+                <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Kanji / Mặt chữ</label>
                 <div className="flex gap-2">
-                  <input type="text" value={newKanji} onChange={(e) => setNewKanji(e.target.value)} placeholder="VD: 食べる" className="flex-1 p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none text-xl font-['Noto_Sans_JP']" />
-                  <Button type="button" variant="secondary" onClick={handleAiSuggest} disabled={!newKanji || isSuggesting}>{isSuggesting ? '...' : '✨ AI Tự điền'}</Button>
+                  <input type="text" value={newKanji} onChange={(e) => setNewKanji(e.target.value)} placeholder="VD: 傘" className="flex-1 p-4 rounded-2xl border border-slate-200 text-xl font-['Noto_Sans_JP'] focus:ring-2 focus:ring-red-500 focus:outline-none" />
+                  <Button type="button" variant="secondary" onClick={handleAiSuggest} disabled={!newKanji || isSuggesting}>{isSuggesting ? '...' : '✨ AI'}</Button>
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-600 uppercase tracking-wider">Cách đọc (Hiragana)</label>
-                <input type="text" value={newReading} onChange={(e) => setNewReading(e.target.value)} placeholder="VD: たべる (tabemasu)" className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none" />
+                <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Cách đọc (Hiragana)</label>
+                <input type="text" value={newReading} onChange={(e) => setNewReading(e.target.value)} placeholder="VD: かさ" className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none font-bold" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-600 uppercase tracking-wider">Bài số</label>
-                  <input type="number" value={newLesson} onChange={(e) => setNewLesson(parseInt(e.target.value))} className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none font-bold" />
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Bài học số</label>
+                  <input type="number" value={newLesson} onChange={(e) => setNewLesson(parseInt(e.target.value))} className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none font-black" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-600 uppercase tracking-wider">Loại từ</label>
-                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as any)} className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none bg-white font-medium">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Phân loại</label>
+                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as any)} className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none bg-white font-bold">
                     <option value="verb">Động từ</option>
                     <option value="kanji">Hán tự</option>
                     <option value="general">Khác</option>
@@ -389,11 +429,14 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-600 uppercase tracking-wider">Nghĩa tiếng Việt</label>
-                <input type="text" value={newMeaning} onChange={(e) => setNewMeaning(e.target.value)} placeholder="VD: Ăn cơm" className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none" />
+                <label className="text-xs font-black text-slate-500 uppercase tracking-widest">Nghĩa tiếng Việt</label>
+                <input type="text" value={newMeaning} onChange={(e) => setNewMeaning(e.target.value)} placeholder="VD: Cái ô" className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-red-500 focus:outline-none font-bold text-red-600" />
               </div>
-              {formFeedback && <div className={`p-4 rounded-xl text-center font-bold text-sm ${formFeedback.includes('thành công') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{formFeedback}</div>}
-              <Button type="submit" className="w-full py-4 text-lg">📥 Lưu vào từ điển cá nhân</Button>
+              {formFeedback && <div className={`p-4 rounded-2xl text-center font-black text-sm ${formFeedback.includes('thành công') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{formFeedback}</div>}
+              <Button type="submit" className="w-full py-4 text-lg">📥 Lưu vào từ điển</Button>
+              <div className="pt-4 border-t border-slate-100 flex gap-2">
+                 <Button variant="danger" className="flex-1 py-2 text-xs uppercase font-black" onClick={handleClearAll}>📚 Khôi phục dữ liệu sách</Button>
+              </div>
             </form>
           </div>
         )}
@@ -401,38 +444,37 @@ const App: React.FC = () => {
 
       {/* AI Modal */}
       {(explaining || aiExplanation) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-2xl my-8 overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-[2rem] w-full max-w-2xl overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] border border-slate-200">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
-              <div className="flex flex-col">
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <span className="text-2xl">🤖</span> AI Tutor
-                </h3>
-                {explainingVocab && <span className="text-sm text-slate-500 font-bold">{explainingVocab.kanji} ({explainingVocab.reading})</span>}
-              </div>
-              <button onClick={closeModal} className="p-2 hover:bg-slate-100 rounded-full transition-colors">✕</button>
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                <span className="text-2xl">🤖</span> AI Phân Tích
+              </h3>
+              <button onClick={closeModal} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400">✕</button>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              <div className="w-full aspect-video bg-slate-100 relative">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {aiImage && <div className="rounded-3xl overflow-hidden shadow-lg border border-slate-100"><img src={aiImage} alt="Visual" className="w-full aspect-video object-cover" /></div>}
+              <div className="whitespace-pre-wrap leading-relaxed text-slate-700 text-lg font-medium">
                 {explaining ? (
-                  <div className="absolute inset-0 flex items-center justify-center bg-slate-50 animate-pulse font-bold text-slate-400 italic">✨ AI đang vẽ hình minh họa...</div>
-                ) : aiImage && (
-                  <img src={aiImage} alt="Visual" className="w-full h-full object-cover" />
-                )}
-              </div>
-              <div className="p-8 whitespace-pre-wrap leading-relaxed text-slate-700 text-lg">
-                {explaining ? "AI đang phân tích và chuẩn bị lời giải thích cho từ này..." : aiExplanation}
+                  <div className="flex flex-col items-center justify-center py-10 space-y-4">
+                    <div className="w-12 h-12 border-4 border-red-100 border-t-red-600 rounded-full animate-spin"></div>
+                    <p className="text-slate-400 font-bold animate-pulse">AI đang nghiên cứu từ này cho bạn...</p>
+                  </div>
+                ) : aiExplanation}
               </div>
             </div>
-            {!explaining && <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end"><Button onClick={closeModal}>Đã hiểu bài!</Button></div>}
+            {!explaining && <div className="p-6 border-t border-slate-100 flex justify-end bg-slate-50"><Button onClick={closeModal} className="px-8 font-black">Đã hiểu bài!</Button></div>}
           </div>
         </div>
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-200 p-2 z-40">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-200 p-2 z-40 shadow-2xl">
         <div className="max-w-md mx-auto grid grid-cols-4 gap-2">
           {[{ id: 'flashcard', icon: '🎴', label: 'Học' }, { id: 'quiz', icon: '📝', label: 'Test' }, { id: 'list', icon: '📖', label: 'Tra cứu' }, { id: 'add', icon: '➕', label: 'Thêm' }].map((tab) => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as TabType)} className={`flex flex-col items-center gap-1 py-2 rounded-xl transition-all ${activeTab === tab.id ? 'bg-red-50 text-red-600 font-bold scale-105 shadow-sm' : 'text-slate-400'}`}><span className="text-2xl">{tab.icon}</span><span className="text-[10px] uppercase font-bold">{tab.label}</span></button>
+            <button key={tab.id} onClick={() => setActiveTab(tab.id as TabType)} className={`flex flex-col items-center gap-1 py-2 rounded-2xl transition-all ${activeTab === tab.id ? 'bg-red-600 text-white font-black scale-105 shadow-lg shadow-red-200' : 'text-slate-400 hover:text-slate-600'}`}>
+              <span className="text-2xl">{tab.icon}</span>
+              <span className="text-[10px] uppercase font-black tracking-tighter">{tab.label}</span>
+            </button>
           ))}
         </div>
       </nav>

@@ -2,12 +2,9 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { SYSTEM_PROMPT } from "../constants";
 
-export const getGeminiClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-};
-
+// Fix: Use process.env.API_KEY directly in fresh instances to follow SDK guidelines
 export const explainWord = async (word: string, reading: string, meaning: string) => {
-  const ai = getGeminiClient();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `Giải thích chi tiết về từ vựng N5: "${word}" (${reading}). Nghĩa là "${meaning}". Hãy cho tôi ví dụ và cách dùng.`;
   
   const response = await ai.models.generateContent({
@@ -21,14 +18,15 @@ export const explainWord = async (word: string, reading: string, meaning: string
   return response.text;
 };
 
+// Fix: Correct contents structure for image generation and use fresh instance
 export const generateVocabImage = async (word: string, meaning: string) => {
-  const ai = getGeminiClient();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `A clear, high-quality educational illustration or photo representing the Japanese word "${word}" which means "${meaning}". Cute, simple, and clean style suitable for language learning.`;
   
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: [{ text: prompt }],
+      contents: { parts: [{ text: prompt }] },
       config: {
         imageConfig: {
           aspectRatio: "16:9"
@@ -36,9 +34,11 @@ export const generateVocabImage = async (word: string, meaning: string) => {
       }
     });
 
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    if (response.candidates && response.candidates[0].content.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
       }
     }
     return null;
@@ -48,8 +48,9 @@ export const generateVocabImage = async (word: string, meaning: string) => {
   }
 };
 
+// Fix: Use fresh GoogleGenAI instance for suggestions
 export const suggestVocabDetails = async (kanji: string) => {
-  const ai = getGeminiClient();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Cung cấp thông tin cho từ N5: "${kanji}". Phân loại là 'kanji', 'verb' hoặc 'general'. Gợi ý bài số (lesson) từ 1-25 dựa trên giáo trình Minna no Nihongo. Trả về JSON.`,
@@ -72,18 +73,19 @@ export const suggestVocabDetails = async (kanji: string) => {
   });
   
   try {
-    return JSON.parse(response.text);
+    return JSON.parse(response.text || '{}');
   } catch (e) {
     return null;
   }
 };
 
+// Fix: Correct contents structure for TTS and use fresh instance
 export const generateTTS = async (text: string): Promise<string | undefined> => {
-  const ai = getGeminiClient();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `Say clearly in Japanese: ${text}` }] }],
+      contents: { parts: [{ text: `Say clearly in Japanese: ${text}` }] },
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
@@ -100,6 +102,7 @@ export const generateTTS = async (text: string): Promise<string | undefined> => 
   }
 };
 
+// Fix: Manual implementation of base64 decoding for raw PCM audio as per guidelines
 export const decodeAudioData = async (
   base64String: string,
   ctx: AudioContext,
